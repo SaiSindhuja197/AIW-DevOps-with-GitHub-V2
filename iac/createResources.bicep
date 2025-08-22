@@ -787,126 +787,85 @@ resource imageclassifierstgacc 'Microsoft.Storage/storageAccounts@2022-05-01' = 
 }
 
 //
-
 //Azure Front Door (CDN) for product images, old website, and new website
 
-resource frontDoor 'Microsoft.Network/frontDoors@2021-06-01' = {
+resource fdProfile 'Microsoft.Cdn/profiles@2023-05-01' = {
   name: '${prefixHyphenated}-fd${suffix}'
-  location: 'global'
-  tags: resourceTags
+  location: resourceLocation
+  sku: {
+    name: 'Standard_AzureFrontDoor' // or Premium_AzureFrontDoor if you need WAF/rules engine
+  }
+}
+
+resource fdEndpoint 'Microsoft.Cdn/profiles/endpoints@2023-05-01' = {
+  name: '${fdProfile.name}-endpoint'
+  parent: fdProfile
+  location: resourceLocation
   properties: {
-    routingRules: [
+    originHostHeader: '${prefixHyphenated}-ui${suffix}.azurewebsites.net'
+    origins: [
       {
-        name: 'ImagesRoutingRule'
-        frontendEndpoints: [
-          imagesFrontendEndpoint.name
-        ]
-        acceptedProtocols: [
-          'Https'
-        ]
-        patternsToMatch: [
-          '/images/*'
-        ]
-        routeConfiguration: {
-          '@odata.type': '#Microsoft.Network.FrontDoor.Models.FrontdoorForwardingConfiguration'
-          forwardingProtocol: 'MatchRequest'
-          backendPool: imagesBackendPool.name
-        }
-        enabledState: 'Enabled'
-      }
-      {
-        name: 'UiRoutingRule'
-        frontendEndpoints: [
-          uiFrontendEndpoint.name
-        ]
-        acceptedProtocols: [
-          'Https'
-        ]
-        patternsToMatch: [
-          '/*'
-        ]
-        routeConfiguration: {
-          '@odata.type': '#Microsoft.Network.FrontDoor.Models.FrontdoorForwardingConfiguration'
-          forwardingProtocol: 'MatchRequest'
-          backendPool: uiBackendPool.name
-        }
-        enabledState: 'Enabled'
-      }
-    ]
-    backendPools: [
-      {
-        name: 'imagesBackendPool'
-        backends: [
-          {
-            address: replace(replace(productimagesstgacc.properties.primaryEndpoints.blob, 'https://', ''), '/', '')
-            httpPort: 80
-            httpsPort: 443
-            enabledState: 'Enabled'
-            priority: 1
-            weight: 50
-          }
-        ]
-        loadBalancingSettings: {
-          id: 'DefaultLoadBalancingSettings'
-        }
-        healthProbeSettings: {
-          id: 'DefaultProbeSettings'
+        name: 'uiOrigin'
+        properties: {
+          hostName: '${prefixHyphenated}-ui${suffix}.azurewebsites.net'
         }
       }
       {
-        name: 'uiBackendPool'
-        backends: [
-          {
-            address: replace(replace(ui2stgacc.properties.primaryEndpoints.web, 'https://', ''), '/', '')
-            httpPort: 80
-            httpsPort: 443
-            enabledState: 'Enabled'
-            priority: 1
-            weight: 50
-          }
-        ]
-        loadBalancingSettings: {
-          id: 'DefaultLoadBalancingSettings'
-        }
-        healthProbeSettings: {
-          id: 'DefaultProbeSettings'
+        name: 'productImagesOrigin'
+        properties: {
+          hostName: '${prefixHyphenated}images.blob.core.windows.net'
         }
       }
     ]
-    frontendEndpoints: [
-      {
-        name: 'imagesFrontendEndpoint'
-        hostName: '${prefixHyphenated}-images${suffix}.azurefd.net'
-        sessionAffinityEnabledState: 'Disabled'
-        sessionAffinityTtlSeconds: 0
-        webApplicationFirewallPolicyLink: null
-      }
-      {
-        name: 'uiFrontendEndpoint'
-        hostName: '${prefixHyphenated}-ui2${suffix}.azurefd.net'
-        sessionAffinityEnabledState: 'Disabled'
-        sessionAffinityTtlSeconds: 0
-        webApplicationFirewallPolicyLink: null
-      }
-    ]
-    loadBalancingSettings: [
-      {
-        name: 'DefaultLoadBalancingSettings'
-        sampleSize: 4
-        successfulSamplesRequired: 2
-        additionalLatencyMilliseconds: 0
-      }
-    ]
-    healthProbeSettings: [
-      {
-        name: 'DefaultProbeSettings'
-        path: '/'
-        protocol: 'Https'
-        intervalInSeconds: 120
-        healthProbeMethod: 'HEAD'
-      }
-    ]
-    enabledState: 'Enabled'
+    deliveryPolicy: {
+      description: 'Rules for caching/static content'
+      rules: [
+        {
+          name: 'CacheImages'
+          order: 1
+          actions: [
+            {
+              name: 'CacheExpiration'
+              parameters: {
+                cacheBehavior: 'Override'
+                cacheDuration: '7.00:00:00' // 7 days
+              }
+            }
+          ]
+          conditions: [
+            {
+              name: 'UrlPath'
+              parameters: {
+                operator: 'EndsWith'
+                matchValues: ['.png', '.jpg', '.jpeg']
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+
+// 
+// Custom Domain + HTTPS for Front Door Endpoint
+// 
+
+resource fdCustomDomain 'Microsoft.Cdn/profiles/customDomains@2023-05-01' = {
+  name: '${prefixHyphenated}-customdomain'
+  parent: fdProfile
+  properties: {
+    hostName: 'www.contoso.com' // <-- replace with your real custom domain
+  }
+}
+
+resource fdCustomDomainHttps 'Microsoft.Cdn/profiles/customDomains/customHttpsConfiguration@2023-05-01' = {
+  name: 'httpsConfig'
+  parent: fdCustomDomain
+  properties: {
+    certificateType: 'ManagedCertificate' // FD-managed SSL cert
+    protocolType: 'ServerNameIndication'
+    minimumTlsVersion: 'TLS12'
   }
 }
 //
